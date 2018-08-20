@@ -1,0 +1,2 @@
+# ddr
+Dynamics dimensionality reduction
