@@ -1,5 +1,6 @@
 
 import numpy as np
+from sklearn.base import BaseEstimator
 #import matplotlib.pyplot as plt
 #import tensorflow as tf
 #from .utils import InputError, is_positive_integer, ceil
@@ -9,32 +10,234 @@ import numpy as np
 #from sklearn.model_selection import *
 #from sklearn.discriminant_analysis import *
 from matplotlib.collections import LineCollection
+from matplotlib.gridspec import GridSpec
 import matplotlib.pyplot as plt
 from scipy import interpolate
 #tfd = tf.contrib.distributions
+#from qml.utils import is_none
+from qml.qmlearn.data import Data
+import rmsd
+from msmbuilder.decomposition import tICA as msmtICA
 
-def colorplot(x,y, imgname):
-    # fit spline
-    tck,u=interpolate.splprep([x, y],s=0.0)
-    x_i,y_i= interpolate.splev(np.linspace(0,1,10000),tck)
+class tICA(msmtICA):
 
-    # Gradient color change magic
-    z = np.linspace(0.0, 1.0, x_i.shape[0])
-    points = np.array([x_i,y_i]).T.reshape(-1,1,2)
-    segments = np.concatenate([points[:-1], points[1:]], axis=1)
-    lc = LineCollection(segments, array=z, cmap = 'viridis',
-            norm = plt.Normalize(0.0, 1.0), alpha = 0.8)
-    ax = plt.gca()
-    ax.add_collection(lc)
+    def __init__(self, **kwargs):
+        super(tICA, self).__init__(**kwargs)
 
-    # plotting
-    xrange_ = x_i.max() - x_i.min()
-    yrange_ = y_i.max() - y_i.min()
-    ax.set_xlim([x_i.min()-0.1*xrange_, x_i.max()+0.1*xrange_])
-    ax.set_ylim([y_i.min()-0.1*yrange_, y_i.max()+0.1*yrange_])
-    plt.savefig(imgname + ".png", dpi = 600)
-    plt.clf()
+    def fit(self, X, y=None):
+        if isinstance(X, list):
+            return msmtICA.fit(self, X, y)
+        else:
+            return msmtICA.fit(self, [X], y)
 
+    def transform(self, X):
+        if isinstance(X, list):
+            return msmtICA.transform(self, X)
+        else:
+            return msmtICA.transform(self, [X])[0]
+
+
+def colorplot(x, y=None, imgname = None, same_axis = True):
+    """
+    Create a 2D plot or 1D if y == None
+    """
+    if y is None:
+        # Do 1D plot
+        plt.plot(range(len(x)), x)
+    else:
+        # Do 2D plot
+
+        # Create figure
+        fig = plt.figure(figsize=(6,9))
+        gs = GridSpec(2, 1, height_ratios=[2, 1]) 
+        ax0 = plt.subplot(gs[0])
+        ax1 = plt.subplot(gs[1])
+
+        # ax0
+        # fit spline
+        tck,u=interpolate.splprep([x, y],s=0.0)
+        x_i,y_i= interpolate.splev(np.linspace(0,1,10000),tck)
+
+        # Gradient color change magic
+        z = np.linspace(0.0, 1.0, x_i.shape[0])
+        points = np.array([x_i,y_i]).T.reshape(-1,1,2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+        lc = LineCollection(segments, array=z, cmap = 'viridis',
+                norm = plt.Normalize(0.0, 1.0), alpha = 0.8)
+        ax0.add_collection(lc)
+
+        # plotting
+        if same_axis:
+            max_ = max(x_i.max(), y_i.max())
+            min_ = min(x_i.min(), y_i.min())
+            range_ = max_ - min_
+            ax0.set_xlim([min_-0.1*range_, max_+0.1*range_])
+            ax0.set_ylim([min_-0.1*range_, max_+0.1*range_])
+        else:
+            xrange_ = x_i.max() - x_i.min()
+            yrange_ = y_i.max() - y_i.min()
+            ax0.set_xlim([x_i.min()-0.1*xrange_, x_i.max()+0.1*xrange_])
+            ax0.set_ylim([y_i.min()-0.1*yrange_, y_i.max()+0.1*yrange_])
+
+        # time plots
+        ax1.plot(range(len(x)), x)
+        ax1.plot(range(len(y)), y)
+
+    if imgname is None:
+        plt.show()
+    else:
+        plt.savefig(imgname + ".png", dpi = 600, bbox_inches='tight')
+        plt.clf()
+
+def significance(data, indices, m):
+    """
+    Get the norm of the numerical gradients of the output of
+    a sklearn model `m` wrt carteesian coordinates given by indices.
+    """
+
+    def make_pertubations(data, indices, deviation = 1e-4):
+        """
+        Create small deviations to the coordinates along
+        the x, y and z coordinate
+        """
+
+
+        objects = []
+        for i in indices:
+            data_object = Data()
+            nuclear_charges = data.nuclear_charges[i]
+            xyz = data.coordinates[i]
+            data_object.ncompounds = 4 * nuclear_charges.size
+            data_object.nuclear_charges = np.asarray([nuclear_charges for _ in range(data_object.ncompounds)])
+
+            coords = np.empty([4*xyz.size, xyz.size], dtype = float)
+            xyz_flat = xyz.ravel()
+            zeros = np.zeros(xyz.size)
+
+            c = 0
+            for i in range(xyz.size):
+                dev = zeros.copy()
+                dev[i] += deviation
+                coords[c] = xyz_flat - 2*dev
+                coords[c + 1] = xyz_flat - dev
+                coords[c + 2] = xyz_flat + dev
+                coords[c + 3] = xyz_flat + 2*dev
+                c += 4
+
+            data_object.coordinates = coords.reshape((4*xyz.size,) + xyz.shape)
+            objects.append(data_object)
+
+        return objects
+
+    def calculate_numerical_gradient(y, deviation = 1e-4):
+        """
+        Get partial gradients from function values
+        """
+        mol_grad = []
+
+        x_size = y.shape[1]//4
+        x_shape = (x_size // 3, 3)
+
+        grad_shape = (y.shape[0], y.shape[-1], x_size)
+        gradients = np.zeros(grad_shape)
+
+        for c, i in enumerate(range(0, y.shape[1], 4)):
+            grad = (-y[:,i+3] + 8*y[:,i+2] - 8*y[:,i+1] + y[:,i]) / (12 * deviation)
+            gradients[:,:,c] = grad
+
+        return gradients.reshape((y.shape[0], y.shape[-1]) + x_shape)
+
+
+    if isinstance(indices, int):
+        indices = [indices]
+
+    perturbed_objects = make_pertubations(data, indices)
+    values = np.asarray([m.transform(data_object) for data_object in perturbed_objects])
+    partial_grad = calculate_numerical_gradient(values)
+    # Get percentage of norm per atom
+    x = np.sqrt(np.sum(partial_grad**2, axis=3))
+    return x / x.sum(2)[:,:,None]
+
+class Align(BaseEstimator):
+    """
+    Align molecules and get their euclidian distance to some basis molecules
+    """
+
+    def __init__(self, basis):
+        """
+        :param basis: indices of the molecules that will act as basis
+        :type basis: list
+        """
+
+        self.basis = basis
+
+
+    def fit(self, X, y=None):
+
+        self.basis_coords = X.coordinates[self.basis]
+        self.basis_coords -= np.mean(self.basis_coords, axis=1)[:,None]
+
+        return self
+
+    def transform(self, X):
+
+        # Align molecules P to molecules Q
+        P = X.coordinates
+        P -=  np.mean(P, axis=1)[:,None]
+        Q = self.basis_coords
+
+
+        C = np.dot(np.transpose(P, [0,2,1]), Q.T)
+        V, S, W = np.linalg.svd(np.transpose(C, [0,3,1,2]))
+        d = (np.linalg.det(V) * np.linalg.det(W)) < 0.0
+        S[d,-1] *= -1
+        V[d, :, -1] *= -1
+
+        U = np.dot(V[0,1], W[0,1])
+        U = np.matmul(V, W)
+
+        P = np.einsum('ijk,iabk->ijba', P, U)
+
+        delta = P - np.transpose(Q, [1,2,0])
+
+        rmsd = np.sqrt(np.sum(delta**2, axis=(1,2)))
+
+        return rmsd
+
+    def fit_transform(self, X, y=None):
+        return self.fit(X).transform(X)
+
+class Distances(BaseEstimator):
+    """
+    Upper triangle of internal distances between atoms.
+    """
+
+    def fit(self, X, y=None):
+
+        return self
+
+    def transform(self, X):
+        return self._transform(X)
+
+    def _transform(self, X):
+
+        P = X.coordinates
+
+        distance_matrix = np.sqrt(np.sum((P[:,:,None] - P[:,None,:]) ** 2, axis = 3))
+
+        iut = np.triu_indices(P.shape[1], 1)
+        return distance_matrix[:,iut[0], iut[1]]
+
+    def fit_transform(self, X, y=None):
+        return self.fit(X).transform(X)
+
+class InverseDistances(Distances):
+    """
+    Upper triangle of internal inverse distances between atoms.
+    """
+
+    def transform(self, X):
+        return 1 / self._transform(X)
 
 # https://wiseodd.github.io/techblog/2016/12/10/variational-autoencoder/
 # https://github.com/wiseodd/generative-models/blob/master/VAE/vanilla_vae/vae_tensorflow.py
