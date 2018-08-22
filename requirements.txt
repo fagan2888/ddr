@@ -1,0 +1,5 @@
+numpy
+scikit-learn
+git@github.com:larsbratholm/qml.git@sklearn_interface
+mdtraj
+msmbuilder
