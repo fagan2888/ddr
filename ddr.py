@@ -16,6 +16,8 @@ from scipy import interpolate
 #tfd = tf.contrib.distributions
 #from qml.utils import is_none
 from qml.qmlearn.data import Data
+from qml.qmlearn.representations import GlobalSLATM as qmlGlobalSLATM
+from qml.qmlearn.representations import AtomicSLATM as qmlAtomicSLATM
 import rmsd
 from msmbuilder.decomposition import tICA as msmtICA
 
@@ -35,7 +37,6 @@ class tICA(msmtICA):
             return msmtICA.transform(self, X)
         else:
             return msmtICA.transform(self, [X])[0]
-
 
 def colorplot(x, y=None, imgname = None, same_axis = True):
     """
@@ -101,14 +102,14 @@ def significance(data, indices, m):
         the x, y and z coordinate
         """
 
-
         objects = []
         for i in indices:
             data_object = Data()
             nuclear_charges = data.nuclear_charges[i]
             xyz = data.coordinates[i]
-            data_object.ncompounds = 4 * nuclear_charges.size
+            data_object.ncompounds = 4 * xyz.size
             data_object.nuclear_charges = np.asarray([nuclear_charges for _ in range(data_object.ncompounds)])
+            data_object.natoms = np.asarray([nuclear_charges.size] * 4 * xyz.size)
 
             coords = np.empty([4*xyz.size, xyz.size], dtype = float)
             xyz_flat = xyz.ravel()
@@ -207,6 +208,24 @@ class Align(BaseEstimator):
     def fit_transform(self, X, y=None):
         return self.fit(X).transform(X)
 
+class Coordinates(BaseEstimator):
+    """
+    Just return the coordinates ravelled.
+    """
+
+    def fit(self, X, y=None):
+
+        return self
+
+    def transform(self, X):
+        if hasattr(X, 'indices'):
+            return X.coordinates[X.indices].reshape(X.indices.size, -1)
+        else:
+            return X.coordinates.reshape(X.coordinates.shape[0], -1)
+
+    def fit_transform(self, X, y=None):
+        return self.fit(X).transform(X)
+
 class Distances(BaseEstimator):
     """
     Upper triangle of internal distances between atoms.
@@ -221,7 +240,11 @@ class Distances(BaseEstimator):
 
     def _transform(self, X):
 
-        P = X.coordinates
+        if hasattr(X, 'indices'):
+            P = X.coordinates[X.indices]
+        else:
+            P = X.coordinates
+
 
         distance_matrix = np.sqrt(np.sum((P[:,:,None] - P[:,None,:]) ** 2, axis = 3))
 
@@ -238,6 +261,31 @@ class InverseDistances(Distances):
 
     def transform(self, X):
         return 1 / self._transform(X)
+
+class GlobalSLATM(qmlGlobalSLATM):
+
+    def __init__(self, **params):
+        super(GlobalSLATM, self).__init__(**params)
+
+    def transform(self, X):
+        return qmlGlobalSLATM.transform(self, X).representations
+
+    def fit_transform(self, X, y=None):
+        return self.fit(X).transform(X)
+
+class AtomicSLATM(qmlAtomicSLATM):
+
+    def __init__(self, indices = None, **params):
+        self.indices = indices
+        super(AtomicSLATM, self).__init__(**params)
+
+    def transform(self, X):
+        representations = qmlAtomicSLATM.transform(self, X).representations[:,self.indices]
+        # Concatenate all the atomic representations
+        return representations.reshape(representations.shape[0], -1)
+
+    def fit_transform(self, X, y=None):
+        return self.fit(X).transform(X)
 
 # https://wiseodd.github.io/techblog/2016/12/10/variational-autoencoder/
 # https://github.com/wiseodd/generative-models/blob/master/VAE/vanilla_vae/vae_tensorflow.py
