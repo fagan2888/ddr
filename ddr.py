@@ -43,13 +43,14 @@ def colorplot(x, y=None, imgname = None, same_axis = True):
     Create a 2D plot or 1D if y == None
     """
     if y is None:
+        plt.figure(figsize=(10,5))
         # Do 1D plot
         plt.plot(range(len(x)), x)
     else:
         # Do 2D plot
 
         # Create figure
-        fig = plt.figure(figsize=(6,9))
+        fig = plt.figure(figsize=(10,15))
         gs = GridSpec(2, 1, height_ratios=[2, 1]) 
         ax0 = plt.subplot(gs[0])
         ax1 = plt.subplot(gs[1])
